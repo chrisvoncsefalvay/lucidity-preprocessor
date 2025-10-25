@@ -56,16 +56,33 @@ class VideoProcessor:
         model = self.plugin_manager.get_plugin(model_name, config)
         self.models[model_name] = model
 
-    def process(self, show_progress: bool = True) -> Path:
+    def process(
+        self,
+        show_progress: bool = True,
+        start_frame: Optional[int] = None,
+        end_frame: Optional[int] = None,
+    ) -> Path:
         """
         Process the video with all added models.
 
         Args:
             show_progress: Whether to show progress bar
+            start_frame: First frame to process (0-indexed, inclusive). If None, starts from beginning.
+            end_frame: Last frame to process (0-indexed, inclusive). If None, processes to end.
 
         Returns:
             Path to the manifest file
         """
+        # Determine actual frame range
+        actual_start = start_frame if start_frame is not None else 0
+        actual_end = end_frame if end_frame is not None else self.video_reader.metadata.total_frames - 1
+
+        # Validate and clamp range
+        actual_start = max(0, actual_start)
+        actual_end = min(actual_end, self.video_reader.metadata.total_frames - 1)
+
+        total_frames_to_process = actual_end - actual_start + 1
+
         # Initialize manifest builder
         manifest_builder = ManifestBuilder(
             self.video_reader.metadata,
@@ -73,8 +90,16 @@ class VideoProcessor:
         )
         manifest_builder.start_processing()
 
+        # Add frame range information to manifest
+        if start_frame is not None or end_frame is not None:
+            manifest_builder.set_processing_info("frame_range", {
+                "start_frame": actual_start,
+                "end_frame": actual_end,
+                "total_frames_processed": total_frames_to_process,
+            })
+
         # Initialize all models
-        print(f"Initializing {len(self.models)} models...")
+        print(f"Initialising {len(self.models)} models...")
         for name, model in self.models.items():
             print(f"  - {name}")
             model.initialize()
@@ -87,13 +112,16 @@ class VideoProcessor:
             model_output_dirs[name] = model_dir
 
         # Process video frames
-        print(f"Processing {self.video_reader.metadata.total_frames} frames...")
+        if start_frame is not None or end_frame is not None:
+            print(f"Processing frames {actual_start} to {actual_end} ({total_frames_to_process} frames)...")
+        else:
+            print(f"Processing {self.video_reader.metadata.total_frames} frames...")
 
-        frames_iterator = self.video_reader.frames()
+        frames_iterator = self.video_reader.frames(start_frame=start_frame, end_frame=end_frame)
         if show_progress:
             frames_iterator = tqdm(
                 frames_iterator,
-                total=self.video_reader.metadata.total_frames,
+                total=total_frames_to_process,
                 desc="Processing",
             )
 

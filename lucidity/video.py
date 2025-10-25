@@ -75,9 +75,17 @@ class VideoReader:
         """Get video metadata."""
         return self._metadata
 
-    def frames(self) -> Generator[Tuple[np.ndarray, float, int], None, None]:
+    def frames(
+        self,
+        start_frame: Optional[int] = None,
+        end_frame: Optional[int] = None,
+    ) -> Generator[Tuple[np.ndarray, float, int], None, None]:
         """
         Generate frames with timing information.
+
+        Args:
+            start_frame: First frame to process (0-indexed, inclusive). If None, starts from beginning.
+            end_frame: Last frame to process (0-indexed, inclusive). If None, processes to end.
 
         Yields:
             Tuple of (frame, timestamp, frame_number)
@@ -85,9 +93,24 @@ class VideoReader:
             - timestamp: Time in seconds from video start
             - frame_number: Frame number (0-indexed)
         """
-        frame_number = 0
+        # Determine range
+        start = start_frame if start_frame is not None else 0
+        end = end_frame if end_frame is not None else self._metadata.total_frames - 1
 
-        while True:
+        # Validate range
+        start = max(0, start)
+        end = min(end, self._metadata.total_frames - 1)
+
+        if start > end:
+            return
+
+        # Seek to start frame
+        if start > 0:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, start)
+
+        frame_number = start
+
+        while frame_number <= end:
             ret, frame = self.cap.read()
             if not ret:
                 break

@@ -40,6 +40,7 @@ class ProcessingManifest(BaseModel):
     output_directory: str
     processing_time_seconds: Optional[float] = None
     timeline_summary: Dict[str, Any] = Field(default_factory=dict)
+    processing_info: Dict[str, Any] = Field(default_factory=dict)  # Additional processing information
 
     class Config:
         json_encoders = {
@@ -62,6 +63,7 @@ class ManifestBuilder:
         self.output_dir = output_dir
         self.model_manifests: Dict[str, ModelOutputManifest] = {}
         self.timeline_summary: Dict[str, Any] = {}
+        self.processing_info: Dict[str, Any] = {}
         self.processing_start_time: Optional[datetime] = None
         self.processing_end_time: Optional[datetime] = None
 
@@ -120,6 +122,16 @@ class ManifestBuilder:
         """
         self.timeline_summary = summary
 
+    def set_processing_info(self, key: str, value: Any) -> None:
+        """
+        Set additional processing information.
+
+        Args:
+            key: Information key
+            value: Information value
+        """
+        self.processing_info[key] = value
+
     def build(self) -> ProcessingManifest:
         """
         Build the complete manifest.
@@ -138,6 +150,7 @@ class ManifestBuilder:
             output_directory=str(self.output_dir),
             processing_time_seconds=processing_time,
             timeline_summary=self.timeline_summary,
+            processing_info=self.processing_info,
         )
 
         return manifest
@@ -157,8 +170,8 @@ class ManifestBuilder:
 
         manifest = self.build()
 
-        # Convert to dict and handle numpy arrays
-        manifest_dict = json.loads(manifest.json(indent=2))
+        # Convert to dict using model_dump() for Pydantic v2
+        manifest_dict = manifest.model_dump(mode='json')
 
         with open(filepath, 'w') as f:
             json.dump(manifest_dict, f, indent=2)
