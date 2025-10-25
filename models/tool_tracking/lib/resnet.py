@@ -21,9 +21,18 @@ Code author: Chinedu Nwoye <br>
 
 import tensorflow as tf
 import numpy as np
-import lib.resnet_utils as utils
+import resnet_utils as utils
 
-    
+# TensorFlow 2.x compatibility
+TF_VERSION = int(tf.__version__.split('.')[0])
+if TF_VERSION >= 2:
+    tf_variable_scope = tf.compat.v1.variable_scope
+    tf_get_variable_scope = tf.compat.v1.get_variable_scope
+else:
+    tf_variable_scope = tf.variable_scope
+    tf_get_variable_scope = tf.get_variable_scope
+
+
 #%% 1. Detection Model for tools presence
         
 class ResNet(object):
@@ -78,7 +87,7 @@ class ResNet(object):
             print('Constructing ResNet backbone:')
             trees['block_0'] = self._images 
             # conv1
-            with tf.variable_scope('conv1'):                 
+            with tf_variable_scope('conv1'):                 
                 x = self._conv(self._images, kernels[0], filters[0], strides[0])
                 x = self._bn(x)
                 x = self._relu(x)
@@ -113,7 +122,7 @@ class ResNet(object):
     
     def _residual_block_first(self, x, out_channel, strides, name="unit"):
         in_channel = x.get_shape().as_list()[-1]
-        with tf.variable_scope(name,reuse=None) as scope:
+        with tf_variable_scope(name,reuse=None) as scope:
             print('\tBuilding unit: {}: {}'.format( scope.name, x.get_shape() ))
             # Shortcut connection
             if in_channel == out_channel:
@@ -137,7 +146,7 @@ class ResNet(object):
 
     def _residual_block(self, x, input_q=None, output_q=None, name="unit"):
         num_channel = x.get_shape().as_list()[-1]
-        with tf.variable_scope(name,reuse=None) as scope:
+        with tf_variable_scope(name,reuse=None) as scope:
             print('\tBuilding unit: {}: {}'.format( scope.name, x.get_shape() ))
             # Shortcut connection
             shortcut = x
@@ -179,7 +188,7 @@ class ResNet(object):
         x = utils._fc(x, out_dim, input_q, output_q, name)
         f = 2 * (in_dim + 1) * out_dim
         w = (in_dim + 1) * out_dim
-        scope_name = tf.get_variable_scope().name + "/" + name
+        scope_name = tf_get_variable_scope().name + "/" + name
         self._add_flops_weights(scope_name, f, w)
         return x
     
@@ -189,7 +198,7 @@ class ResNet(object):
         x = utils._conv(x, filter_size, out_channel, stride, pad, input_q, output_q, name)
         f = 2 * (h/stride) * (w/stride) * in_channel * out_channel * filter_size * filter_size
         w = in_channel * out_channel * filter_size * filter_size
-        scope_name = tf.get_variable_scope().name + "/" + name
+        scope_name = tf_get_variable_scope().name + "/" + name
         self._add_flops_weights(scope_name, f, w)
         return x
     

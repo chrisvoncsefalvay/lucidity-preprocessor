@@ -20,9 +20,24 @@ Code author: Chinedu Nwoye <br>
 # ===============================================================================
 
 import tensorflow as tf
-import lib.resnet_utils as utils
- 
-class ConvLSTMCell(tf.nn.rnn_cell.RNNCell):
+import resnet_utils as utils
+
+# TensorFlow 2.x compatibility
+TF_VERSION = int(tf.__version__.split('.')[0])
+if TF_VERSION >= 2:
+    try:
+        # Try to use tf_keras (Keras 2 for TF 2.16+)
+        import tf_keras
+        RNNCellBase = tf_keras.layers.AbstractRNNCell
+    except ImportError:
+        # Fallback to compat API
+        RNNCellBase = tf.compat.v1.nn.rnn_cell.RNNCell
+    tf_variable_scope = tf.compat.v1.variable_scope
+else:
+    RNNCellBase = tf.nn.rnn_cell.RNNCell
+    tf_variable_scope = tf.variable_scope
+
+class ConvLSTMCell(RNNCellBase):
     def __init__(self,
                  shape,
                  kernel,
@@ -73,7 +88,7 @@ class ConvLSTMCell(tf.nn.rnn_cell.RNNCell):
  
         if not self._w_conv:
             scope = tf.get_variable_scope()
-            with tf.variable_scope(scope, initializer=self._initializer):
+            with tf_variable_scope(scope, initializer=self._initializer):
                 kernel_shape = self._kernel + [inputs.shape[-1].value, 4 * self._depth]
                 self._w_conv = tf.get_variable('w_conv', shape=kernel_shape, dtype=dtype)
  
@@ -84,7 +99,7 @@ class ConvLSTMCell(tf.nn.rnn_cell.RNNCell):
         # Diagonal connections
         if self._use_peepholes and not self._w_f_diag:
             scope = tf.get_variable_scope()
-            with tf.variable_scope(scope, initializer=self._initializer):
+            with tf_variable_scope(scope, initializer=self._initializer):
                 self._w_f_diag = tf.get_variable('w_f_diag', c_prev.shape[1:], dtype=dtype)
                 self._w_i_diag = tf.get_variable('w_i_diag', c_prev.shape[1:], dtype=dtype)
                 self._w_o_diag = tf.get_variable('w_o_diag', c_prev.shape[1:], dtype=dtype)

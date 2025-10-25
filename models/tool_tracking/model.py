@@ -9,8 +9,35 @@ WORK: Created on Mon 12 Nov 14:13:52 2018
 
 import tensorflow as tf
 import numpy as np
-from lib import resnet as resnet 
-from lib.convlstm_cell import ConvLSTM
+import sys
+import os
+
+# Import from lib directory
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_lib_dir = os.path.join(_current_dir, 'lib')
+if _lib_dir not in sys.path:
+    sys.path.insert(0, _lib_dir)
+
+import resnet
+from convlstm_cell import ConvLSTM
+
+# TensorFlow 2.x compatibility
+TF_VERSION = int(tf.__version__.split('.')[0])
+if TF_VERSION >= 2:
+    # Use TF2 compat APIs
+    tf_layers = tf.compat.v1.layers
+    tf_variable_scope = tf.compat.v1.variable_scope
+    try:
+        # Try keras initializer first (preferred in TF2)
+        variance_scaling_initializer = tf.keras.initializers.VarianceScaling()
+    except:
+        # Fallback to compat
+        variance_scaling_initializer = tf.compat.v1.keras.initializers.VarianceScaling()
+else:
+    # TF1.x APIs
+    tf_layers = tf.layers
+    tf_variable_scope = tf.variable_scope
+    variance_scaling_initializer = tf.contrib.layers.variance_scaling_initializer()
 
     
         
@@ -41,19 +68,19 @@ class Model(object):
     def build_model(self):
         ''' Build the deep learning network for tools detection and/or tracking based on the selected model
         Args: super(Model)
-        Returns: 
+        Returns:
             logits:     Float, [batch_size, num_classes] estimated tools logits which translates to tools presence probabilities after sigmoid operation.
-            lhmaps:     Float, [batch_size, height, width, num_classes] channel localization map, one channel corresponding to each tool class in the order of training. 
+            lhmaps:     Float, [batch_size, height, width, num_classes] channel localization map, one channel corresponding to each tool class in the order of training.
         '''
-        with tf.name_scope('Model'): 
+        with tf.name_scope('Model'):
             # feature extraction
             x =  resnet.ResNet(images=self._images, version=18, is_training=self._is_training)._build_model()
             # localization and tracking
-            with tf.variable_scope('ExtraNet') as scope: 
-                with tf.variable_scope('spatio-temporal'):  
-                    spt_x = ConvLSTM(filters=512, kernel=3, strides=1, is_training=self._is_training, scope='convlstm')._residual(x, seek=self._seek)                  
+            with tf_variable_scope('ExtraNet') as scope:
+                with tf_variable_scope('spatio-temporal'):
+                    spt_x = ConvLSTM(filters=512, kernel=3, strides=1, is_training=self._is_training, scope='convlstm')._residual(x, seek=self._seek)
                 lhmaps  = self._locnet(x=spt_x, filters=self._num_classes, name='FCN')
-                logits  = self._spatial_pooling(x=lhmaps)          
+                logits  = self._spatial_pooling(x=lhmaps)
                 bboxes = None
         return logits, lhmaps  
     
@@ -64,10 +91,10 @@ class Model(object):
     
     
     def _locnet(self, x, kernel=1, filters=7, strides=1, name='conv6'):
-        with tf.variable_scope(name) as scope:          
-            x = tf.layers.conv2d(inputs=x, filters=filters, kernel_size=kernel, 
-                            strides=strides, padding='valid', use_bias=True, 
-                            kernel_initializer=tf.contrib.layers.variance_scaling_initializer())
-            print('\tBuilding units: {}: -> {}'.format( scope.name, x.get_shape() )) 
+        with tf_variable_scope(name) as scope:
+            x = tf_layers.conv2d(inputs=x, filters=filters, kernel_size=kernel,
+                            strides=strides, padding='valid', use_bias=True,
+                            kernel_initializer=variance_scaling_initializer)
+            print('\tBuilding units: {}: -> {}'.format( scope.name, x.get_shape() ))
         return x    
     

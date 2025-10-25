@@ -13,11 +13,10 @@ import sys
 from pathlib import Path
 from typing import Optional, Dict, Any
 
+from lucidity.base_model import BaseModel, ModelMetadata, ModelOutput, OutputType
+
 # Add model directory to path for imports
 model_dir = Path(__file__).parent
-sys.path.insert(0, str(model_dir))
-
-from lucidity.base_model import BaseModel, ModelMetadata, ModelOutput, OutputType
 
 
 # Tool classes (from Cholec80 dataset)
@@ -87,72 +86,171 @@ class ToolTrackingModel(BaseModel):
             output_type=OutputType.BBOX,
             output_frequency="per_frame",
             dependencies=[
-                "tensorflow>=1.15,<2.0",
-                "numpy",
-                "opencv-python",
+                "tensorflow>=2.10.0",
+                "numpy>=1.21.0",
+                "opencv-python>=4.0.0",
             ],
         )
 
     def initialize(self) -> None:
         """Initialise the model by loading weights and creating TensorFlow session."""
         try:
-            import tensorflow as tf
+            import os
 
             # Suppress TensorFlow warnings
-            import os
             os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
+            # Force TensorFlow 2.16+ to use legacy Keras 2
+            os.environ['TF_USE_LEGACY_KERAS'] = '1'
+
+            import tensorflow as tf
+
             print(f"  Loading ConvLSTM Tool Tracker from {self.checkpoint_path}")
+            print(f"  TensorFlow version: {tf.__version__}")
 
-            # Import model
-            from model import Model as ConvLSTMModel
+            # Check TensorFlow version
+            tf_version = int(tf.__version__.split('.')[0])
 
-            # Create new graph
-            self.graph = tf.Graph()
-
-            with self.graph.as_default():
-                # Create placeholders
-                self.img_placeholder = tf.placeholder(
-                    dtype=tf.float32,
-                    shape=[None, None, 3],
-                    name='inputs'
-                )
-                self.seek_placeholder = tf.placeholder(
-                    dtype=tf.int64,
-                    shape=[None],
-                    name='seek'
-                )
-
-                # Expand dims and resize
-                x = tf.expand_dims(self.img_placeholder, 0)
-                x = tf.image.resize_bilinear(x, size=(self.input_height, self.input_width))
-
-                # Build model
-                network = ConvLSTMModel(
-                    images=x,
-                    seek=self.seek_placeholder,
-                    num_classes=self.num_classes
-                )
-                self.logits_tensor, self.lhmaps_tensor = network.build_model()
-
-                # Create saver and session
-                saver = tf.train.Saver()
-
-                # Create session config for CPU
-                config = tf.ConfigProto(
-                    device_count={'GPU': 0},
-                    inter_op_parallelism_threads=1,
-                    intra_op_parallelism_threads=1
-                )
-                self.session = tf.Session(config=config, graph=self.graph)
-
-                # Restore weights
-                saver.restore(self.session, self.checkpoint_path)
+            if tf_version == 1:
+                # TensorFlow 1.x compatibility mode
+                self._initialize_tf1()
+            else:
+                # TensorFlow 2.x
+                # Disable eager execution for TF1 compatibility
+                tf.compat.v1.disable_eager_execution()
+                self._initialize_tf1_compat()
 
             print(f"  Model loaded successfully ({self.num_classes} tool classes)")
 
         except Exception as e:
             raise RuntimeError(f"Failed to initialise tool tracking model: {e}")
+
+    def _initialize_tf1(self) -> None:
+        """Initialize with TensorFlow 1.x."""
+        import tensorflow as tf
+        import sys
+        import os
+
+        # Save current directory and change to model directory
+        old_dir = os.getcwd()
+
+        try:
+            os.chdir(model_dir)
+            sys.path.insert(0, str(model_dir))
+
+            # Now import the model
+            from model import Model as ConvLSTMModel
+        finally:
+            # Restore directory only (keep sys.path for model dependencies)
+            os.chdir(old_dir)
+
+        # Create new graph
+        self.graph = tf.Graph()
+
+        with self.graph.as_default():
+            # Create placeholders
+            self.img_placeholder = tf.placeholder(
+                dtype=tf.float32,
+                shape=[None, None, 3],
+                name='inputs'
+            )
+            self.seek_placeholder = tf.placeholder(
+                dtype=tf.int64,
+                shape=[None],
+                name='seek'
+            )
+
+            # Expand dims and resize
+            x = tf.expand_dims(self.img_placeholder, 0)
+            x = tf.image.resize_bilinear(x, size=(self.input_height, self.input_width))
+
+            # Build model
+            network = ConvLSTMModel(
+                images=x,
+                seek=self.seek_placeholder,
+                num_classes=self.num_classes
+            )
+            self.logits_tensor, self.lhmaps_tensor = network.build_model()
+
+            # Create saver and session
+            saver = tf.train.Saver()
+
+            # Create session config for CPU
+            config = tf.ConfigProto(
+                device_count={'GPU': 0},
+                inter_op_parallelism_threads=1,
+                intra_op_parallelism_threads=1
+            )
+            self.session = tf.Session(config=config, graph=self.graph)
+
+            # Restore weights
+            saver.restore(self.session, self.checkpoint_path)
+
+    def _initialize_tf1_compat(self) -> None:
+        """Initialize with TensorFlow 2.x in TF1 compatibility mode."""
+        import tensorflow as tf
+        import sys
+        import os
+
+        # Save current directory and change to model directory
+        old_dir = os.getcwd()
+
+        try:
+            os.chdir(model_dir)
+            sys.path.insert(0, str(model_dir))
+
+            print(f"  Current directory: {os.getcwd()}")
+            print(f"  Sys.path[0]: {sys.path[0]}")
+            print(f"  Looking for lib at: {model_dir / 'lib'}")
+            print(f"  Lib exists: {(model_dir / 'lib').exists()}")
+
+            # Now import the model
+            from model import Model as ConvLSTMModel
+        finally:
+            # Restore directory only (keep sys.path for model dependencies)
+            os.chdir(old_dir)
+
+        # Create new graph
+        self.graph = tf.Graph()
+
+        with self.graph.as_default():
+            # Create placeholders using compat API
+            self.img_placeholder = tf.compat.v1.placeholder(
+                dtype=tf.float32,
+                shape=[None, None, 3],
+                name='inputs'
+            )
+            self.seek_placeholder = tf.compat.v1.placeholder(
+                dtype=tf.int64,
+                shape=[None],
+                name='seek'
+            )
+
+            # Expand dims and resize
+            x = tf.expand_dims(self.img_placeholder, 0)
+            x = tf.image.resize(x, size=(self.input_height, self.input_width), method='bilinear')
+
+            # Build model
+            network = ConvLSTMModel(
+                images=x,
+                seek=self.seek_placeholder,
+                num_classes=self.num_classes
+            )
+            self.logits_tensor, self.lhmaps_tensor = network.build_model()
+
+            # Create saver and session
+            saver = tf.compat.v1.train.Saver()
+
+            # Create session config for CPU
+            config = tf.compat.v1.ConfigProto(
+                device_count={'GPU': 0},
+                inter_op_parallelism_threads=1,
+                intra_op_parallelism_threads=1
+            )
+            self.session = tf.compat.v1.Session(config=config, graph=self.graph)
+
+            # Restore weights
+            saver.restore(self.session, self.checkpoint_path)
 
     def process_frame(
         self,

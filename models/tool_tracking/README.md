@@ -87,13 +87,28 @@ The model produces JSON output with the following structure:
 
 ## Installation
 
-The model requires TensorFlow 1.x. Install dependencies:
+### Requirements
+
+- Python 3.13+
+- TensorFlow 2.16+
+- tf-keras (for Keras 2 compatibility)
+
+Install dependencies:
 
 ```bash
-pip install tensorflow==1.15.0
+pip install tensorflow>=2.16.0 tf-keras numpy opencv-python
 ```
 
-Note: TensorFlow 1.15 is the last 1.x release and may require Python 3.7 or earlier.
+### Current Status
+
+**Note**: This model is currently being migrated from TensorFlow 1.x to TensorFlow 2.x. The migration includes compatibility updates for:
+- ✅ Plugin discovery and integration
+- ✅ Basic model structure (ResNet, ConvLSTM)
+- ✅ Import paths and module loading
+- ✅ TF2 API compatibility for layers, variable scopes, get_variable
+- ⏳ GraphKeys and additional TF1 APIs (work in progress)
+
+The model is discoverable via CLI but full inference requires completing the TF2 migration.
 
 ## Pretrained Weights
 
