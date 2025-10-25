@@ -232,4 +232,9 @@ def get_plugin_manager() -> PluginManager:
         _global_plugin_manager = PluginManager()
         _global_plugin_manager.discover_plugins()
 
+        # Auto-discover from local models directory if it exists
+        local_models_dir = Path.cwd() / "models"
+        if local_models_dir.exists() and local_models_dir.is_dir():
+            _global_plugin_manager.discover_from_directory(local_models_dir)
+
     return _global_plugin_manager

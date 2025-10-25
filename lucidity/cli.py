@@ -65,6 +65,16 @@ def cli():
     type=int,
     help='End frame number (0-indexed, inclusive)',
 )
+@click.option(
+    '--output-format',
+    type=click.Choice(['frames', 'video'], case_sensitive=False),
+    help='Output format for frame-based models: "frames" (individual files) or "video" (MP4)',
+)
+@click.option(
+    '--fps',
+    type=float,
+    help='FPS for video output (defaults to input video FPS)',
+)
 def process(
     video_path: str,
     models: str,
@@ -76,6 +86,8 @@ def process(
     end_time: Optional[float],
     start_frame: Optional[int],
     end_frame: Optional[int],
+    output_format: Optional[str],
+    fps: Optional[float],
 ):
     """
     Process a video with selected models.
@@ -166,6 +178,8 @@ def process(
             show_progress=not no_progress,
             start_frame=frame_range_start,
             end_frame=frame_range_end,
+            output_format=output_format,
+            output_fps=fps,
         )
         click.echo(f"\nProcessing complete!")
         click.echo(f"Manifest saved to: {manifest_path}")

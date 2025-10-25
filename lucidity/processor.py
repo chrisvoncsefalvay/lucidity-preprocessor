@@ -61,6 +61,8 @@ class VideoProcessor:
         show_progress: bool = True,
         start_frame: Optional[int] = None,
         end_frame: Optional[int] = None,
+        output_format: Optional[str] = None,
+        output_fps: Optional[float] = None,
     ) -> Path:
         """
         Process the video with all added models.
@@ -69,6 +71,8 @@ class VideoProcessor:
             show_progress: Whether to show progress bar
             start_frame: First frame to process (0-indexed, inclusive). If None, starts from beginning.
             end_frame: Last frame to process (0-indexed, inclusive). If None, processes to end.
+            output_format: Output format for frame-based models ('frames' or 'video'). If None, uses default.
+            output_fps: FPS for video output. If None, uses input video FPS.
 
         Returns:
             Path to the manifest file
@@ -137,12 +141,18 @@ class VideoProcessor:
 
         # Save outputs for each model
         print("Saving outputs...")
+
+        # Determine output FPS
+        video_fps = output_fps if output_fps is not None else self.video_reader.metadata.fps
+
         for model_name, model in self.models.items():
             print(f"  - {model_name}")
             output_files = self._save_model_outputs(
                 model_name,
                 model,
                 model_output_dirs[model_name],
+                output_format=output_format,
+                output_fps=video_fps,
             )
 
             # Get output statistics
@@ -186,6 +196,8 @@ class VideoProcessor:
         model_name: str,
         model: BaseModel,
         output_dir: Path,
+        output_format: Optional[str] = None,
+        output_fps: Optional[float] = None,
     ) -> List[OutputFileInfo]:
         """
         Save outputs from a model to disk.
@@ -194,6 +206,8 @@ class VideoProcessor:
             model_name: Name of the model
             model: Model instance
             output_dir: Directory to save outputs
+            output_format: Output format for frame-based models ('frames' or 'video')
+            output_fps: FPS for video output
 
         Returns:
             List of OutputFileInfo for saved files
@@ -208,20 +222,40 @@ class VideoProcessor:
 
         # Save outputs based on type
         if metadata.output_type == OutputType.FRAME:
-            # Save as images or video
-            frames_dir = output_dir / "frames"
-            frames_dir.mkdir(exist_ok=True)
+            # Determine output format
+            format_choice = output_format if output_format else 'frames'
 
-            for entry in entries:
-                frame_path = frames_dir / f"frame_{entry.frame_number:06d}.npy"
-                np.save(frame_path, entry.output.data)
+            if format_choice == 'video':
+                # Save as video file
+                video_path = output_dir / "output.mp4"
+                self._save_frames_as_video(
+                    entries=entries,
+                    output_path=video_path,
+                    fps=output_fps or 30.0,
+                )
 
-            output_files.append(OutputFileInfo(
-                path=str(frames_dir.relative_to(self.output_dir)),
-                type="frames",
-                format="npy",
-                description=f"Frame outputs ({len(entries)} frames)",
-            ))
+                output_files.append(OutputFileInfo(
+                    path=str(video_path.relative_to(self.output_dir)),
+                    type="video",
+                    format="mp4",
+                    description=f"Video output ({len(entries)} frames @ {output_fps or 30.0} fps)",
+                    size_bytes=video_path.stat().st_size,
+                ))
+            else:
+                # Save as individual frame files (default)
+                frames_dir = output_dir / "frames"
+                frames_dir.mkdir(exist_ok=True)
+
+                for entry in entries:
+                    frame_path = frames_dir / f"frame_{entry.frame_number:06d}.npy"
+                    np.save(frame_path, entry.output.data)
+
+                output_files.append(OutputFileInfo(
+                    path=str(frames_dir.relative_to(self.output_dir)),
+                    type="frames",
+                    format="npy",
+                    description=f"Frame outputs ({len(entries)} frames)",
+                ))
 
         elif metadata.output_type in [OutputType.KEYPOINTS, OutputType.BBOX, OutputType.LABEL]:
             # Save as JSON
@@ -312,7 +346,7 @@ class VideoProcessor:
         # Save model metadata
         metadata_file = output_dir / "model_metadata.json"
         with open(metadata_file, 'w') as f:
-            json.dump(json.loads(metadata.json()), f, indent=2)
+            json.dump(metadata.model_dump(mode='json'), f, indent=2)
 
         output_files.append(OutputFileInfo(
             path=str(metadata_file.relative_to(self.output_dir)),
@@ -342,3 +376,95 @@ class VideoProcessor:
             return [self._serialize_data(item) for item in data]
         else:
             return data
+
+    def _save_frames_as_video(
+        self,
+        entries: List,
+        output_path: Path,
+        fps: float,
+    ) -> None:
+        """
+        Save frame outputs as a video file.
+
+        Args:
+            entries: Timeline entries containing frame data
+            output_path: Path to save the video
+            fps: Frames per second for the video
+        """
+        import cv2
+
+        if not entries:
+            return
+
+        # Get first frame to determine dimensions
+        first_frame = entries[0].output.data
+
+        # Check if we have a visualisation in metadata (for depth maps)
+        if 'visualisation' in entries[0].output.metadata:
+            # Use the pre-generated visualisation
+            height, width = entries[0].output.metadata['visualisation'].shape[:2]
+            use_visualisation = True
+        else:
+            # Process raw frame data
+            if len(first_frame.shape) == 2:
+                # Single channel (e.g., depth map) - needs normalization
+                height, width = first_frame.shape
+                use_visualisation = False
+            elif len(first_frame.shape) == 3:
+                # Multi-channel (e.g., RGB)
+                height, width = first_frame.shape[:2]
+                use_visualisation = False
+            else:
+                raise ValueError(f"Unsupported frame shape: {first_frame.shape}")
+
+        # Create video writer
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
+
+        try:
+            for entry in entries:
+                frame_data = entry.output.data
+
+                # Get frame to write
+                if use_visualisation and 'visualisation' in entry.output.metadata:
+                    # Use pre-generated colourmap visualisation
+                    frame = entry.output.metadata['visualisation']
+                elif len(frame_data.shape) == 2:
+                    # Single channel - normalise and apply colourmap
+                    # Normalise to 0-255
+                    frame_min = frame_data.min()
+                    frame_max = frame_data.max()
+
+                    if frame_max > frame_min:
+                        normalised = ((frame_data - frame_min) / (frame_max - frame_min) * 255).astype(np.uint8)
+                    else:
+                        normalised = np.zeros_like(frame_data, dtype=np.uint8)
+
+                    # Apply colourmap
+                    frame = cv2.applyColorMap(normalised, cv2.COLORMAP_INFERNO)
+                elif len(frame_data.shape) == 3:
+                    # Multi-channel - assume RGB, convert to BGR for OpenCV
+                    if frame_data.shape[2] == 3:
+                        # Normalise if needed
+                        if frame_data.max() <= 1.0:
+                            frame = (frame_data * 255).astype(np.uint8)
+                        else:
+                            frame = frame_data.astype(np.uint8)
+
+                        # Convert RGB to BGR
+                        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                    else:
+                        raise ValueError(f"Unsupported number of channels: {frame_data.shape[2]}")
+                else:
+                    raise ValueError(f"Unsupported frame shape: {frame_data.shape}")
+
+                # Ensure frame is the right size
+                if frame.shape[:2] != (height, width):
+                    frame = cv2.resize(frame, (width, height))
+
+                out.write(frame)
+
+        finally:
+            out.release()
+
+        print(f"    Video saved to: {output_path.name}")
