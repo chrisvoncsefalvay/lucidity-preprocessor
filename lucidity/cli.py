@@ -75,6 +75,29 @@ def cli():
     type=float,
     help='FPS for video output (defaults to input video FPS)',
 )
+@click.option(
+    '--mask',
+    is_flag=True,
+    help='Enable endoscopic masking (detects and masks circular region)',
+)
+@click.option(
+    '--mask-frames',
+    type=int,
+    default=10,
+    help='Number of frames to analyse for mask detection (default: 10)',
+)
+@click.option(
+    '--mask-threshold',
+    type=int,
+    default=30,
+    help='Black pixel threshold for masking (0-255, default: 30)',
+)
+@click.option(
+    '--mask-method',
+    type=click.Choice(['hough', 'contour'], case_sensitive=False),
+    default='hough',
+    help='Circle fitting method: hough or contour (default: hough)',
+)
 def process(
     video_path: str,
     models: str,
@@ -88,6 +111,10 @@ def process(
     end_frame: Optional[int],
     output_format: Optional[str],
     fps: Optional[float],
+    mask: bool,
+    mask_frames: int,
+    mask_threshold: int,
+    mask_method: str,
 ):
     """
     Process a video with selected models.
@@ -100,6 +127,12 @@ def process(
 
         # Process only 10-30 seconds of video
         lucidity process video.mp4 --models my_model --start-time 10 --end-time 30
+
+        # Process with endoscopic masking
+        lucidity process video.mp4 --models my_model --mask
+
+        # Process with custom masking parameters
+        lucidity process video.mp4 --models my_model --mask --mask-frames 20 --mask-threshold 40
     """
     # Validate that frame and time options are not mixed
     if (start_time is not None or end_time is not None) and (start_frame is not None or end_frame is not None):
@@ -161,10 +194,27 @@ def process(
 
     click.echo()
 
+    # Configure masking if enabled
+    masking_config = None
+    if mask:
+        click.echo("Endoscopic masking: enabled")
+        click.echo(f"  Mask detection frames: {mask_frames}")
+        click.echo(f"  Black threshold: {mask_threshold}")
+        click.echo(f"  Circle fitting method: {mask_method}")
+        click.echo()
+
+        masking_config = {
+            'n_frames': mask_frames,
+            'black_threshold': mask_threshold,
+            'circle_fit_method': mask_method,
+        }
+
     processor = VideoProcessor(
         video_path=video_path,
         output_dir=output,
         plugin_manager=plugin_manager,
+        enable_masking=mask,
+        masking_config=masking_config,
     )
 
     # Add models

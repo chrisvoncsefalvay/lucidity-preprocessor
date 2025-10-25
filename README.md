@@ -10,6 +10,7 @@ A modular video ML inference pipeline with self-discovering model plugins.
 - Frame-accurate alignment for seamless overlay/switching
 - JSON manifest for complete output tracking
 - Self-discovery of model plugins as Python packages
+- Endoscopic video masking for circular region detection
 
 ## Architecture
 
@@ -40,6 +41,12 @@ pip install -e .
 # Process video with specific models
 lucidity process video.mp4 --models pose_detection,scene_segmentation --output ./results
 
+# Process with endoscopic masking
+lucidity process video.mp4 --models my_model --mask --output ./results
+
+# Process with custom masking parameters
+lucidity process video.mp4 --models my_model --mask --mask-frames 20 --mask-threshold 40
+
 # List available models
 lucidity list-models
 
@@ -47,10 +54,43 @@ lucidity list-models
 lucidity model-info pose_detection
 ```
 
-## Creating Model Plugins
+### Masking options
+
+When processing endoscopic videos with the `--mask` flag, the following options are available:
+
+- `--mask`: Enable automatic circular region detection and masking
+- `--mask-frames N`: Number of initial frames to analyse for mask detection (default: 10)
+- `--mask-threshold N`: Pixel intensity threshold for black regions (0-255, default: 30)
+- `--mask-method METHOD`: Circle fitting method, either `hough` or `contour` (default: hough)
+
+## Creating model plugins
 
 See `examples/example_model.py` for a template. Model plugins should:
 1. Inherit from `BaseModel`
 2. Implement required methods
 3. Be installable as a Python package with entry point
 4. Follow the output format specification
+
+## Endoscopic masking
+
+Lucidity includes automatic masking for endoscopic videos that display circular images on black backgrounds. The masking system:
+
+- Automatically detects the circular endoscopic region from the first N frames
+- Applies morphological operations to create clean, non-pixelated borders
+- Provides a simple API for applying masks to frames during inference
+
+For detailed documentation, see [MASKING.md](MASKING.md).
+
+Quick example:
+
+```python
+from lucidity.masking import detect_mask_from_video
+
+# Detect mask from video
+mask = detect_mask_from_video("endoscopic_video.mp4", n_frames=10)
+
+# Apply to frames
+masked_frame = mask.apply(frame)
+```
+
+See [examples/example_masked_model.py](examples/example_masked_model.py) for a complete model implementation.

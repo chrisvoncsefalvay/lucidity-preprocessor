@@ -11,6 +11,7 @@ from lucidity.timeline import Timeline
 from lucidity.manifest import ManifestBuilder, OutputFileInfo, create_output_package_summary
 from lucidity.plugin_manager import PluginManager
 from lucidity.base_model import BaseModel, OutputType
+from lucidity.masking import CircularMask, EndoscopicMaskDetector
 
 
 class VideoProcessor:
@@ -23,6 +24,8 @@ class VideoProcessor:
         video_path: str,
         output_dir: str,
         plugin_manager: Optional[PluginManager] = None,
+        enable_masking: bool = False,
+        masking_config: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize video processor.
@@ -31,6 +34,8 @@ class VideoProcessor:
             video_path: Path to input video
             output_dir: Directory for outputs
             plugin_manager: Optional plugin manager (creates new one if None)
+            enable_masking: Whether to enable endoscopic masking
+            masking_config: Optional masking configuration
         """
         self.video_path = Path(video_path)
         self.output_dir = Path(output_dir)
@@ -44,6 +49,12 @@ class VideoProcessor:
         )
 
         self.models: Dict[str, BaseModel] = {}
+
+        # Masking configuration
+        self.enable_masking = enable_masking
+        self.masking_config = masking_config or {}
+        self.mask: Optional[CircularMask] = None
+        self.frames_for_mask: List[np.ndarray] = []
 
     def add_model(self, model_name: str, config: Optional[Dict[str, Any]] = None) -> None:
         """
@@ -130,6 +141,13 @@ class VideoProcessor:
             )
 
         for frame, timestamp, frame_number in frames_iterator:
+            # Apply masking if enabled
+            if self.enable_masking:
+                frame = self._apply_masking(frame, frame_number)
+                if frame is None:
+                    # Still collecting frames for mask detection
+                    continue
+
             # Process with each model
             for model_name, model in self.models.items():
                 if model.should_process_frame(timestamp, frame_number):
@@ -153,6 +171,7 @@ class VideoProcessor:
                 model_output_dirs[model_name],
                 output_format=output_format,
                 output_fps=video_fps,
+                apply_mask=self.enable_masking,
             )
 
             # Get output statistics
@@ -181,6 +200,18 @@ class VideoProcessor:
         # Save timeline summary
         manifest_builder.set_timeline_summary(self.timeline.get_timeline_summary())
 
+        # Add masking information to manifest and save mask visualisation
+        if self.enable_masking and self.mask is not None:
+            manifest_builder.set_processing_info("masking", {
+                "enabled": True,
+                "centre": self.mask.centre,
+                "radius": float(self.mask.radius),
+                "config": self.masking_config,
+            })
+
+            # Save mask visualisation
+            self._save_mask_visualisation()
+
         # End processing and save manifest
         manifest_builder.end_processing()
         manifest_path = manifest_builder.save()
@@ -198,6 +229,7 @@ class VideoProcessor:
         output_dir: Path,
         output_format: Optional[str] = None,
         output_fps: Optional[float] = None,
+        apply_mask: bool = False,
     ) -> List[OutputFileInfo]:
         """
         Save outputs from a model to disk.
@@ -208,6 +240,7 @@ class VideoProcessor:
             output_dir: Directory to save outputs
             output_format: Output format for frame-based models ('frames' or 'video')
             output_fps: FPS for video output
+            apply_mask: Whether to apply endoscopic mask to frame outputs
 
         Returns:
             List of OutputFileInfo for saved files
@@ -232,6 +265,7 @@ class VideoProcessor:
                     entries=entries,
                     output_path=video_path,
                     fps=output_fps or 30.0,
+                    apply_mask=apply_mask,
                 )
 
                 output_files.append(OutputFileInfo(
@@ -247,8 +281,14 @@ class VideoProcessor:
                 frames_dir.mkdir(exist_ok=True)
 
                 for entry in entries:
+                    frame_data = entry.output.data
+
+                    # Apply mask if enabled
+                    if apply_mask and self.mask is not None:
+                        frame_data = self.mask.apply(frame_data)
+
                     frame_path = frames_dir / f"frame_{entry.frame_number:06d}.npy"
-                    np.save(frame_path, entry.output.data)
+                    np.save(frame_path, frame_data)
 
                 output_files.append(OutputFileInfo(
                     path=str(frames_dir.relative_to(self.output_dir)),
@@ -382,6 +422,7 @@ class VideoProcessor:
         entries: List,
         output_path: Path,
         fps: float,
+        apply_mask: bool = False,
     ) -> None:
         """
         Save frame outputs as a video file.
@@ -390,6 +431,7 @@ class VideoProcessor:
             entries: Timeline entries containing frame data
             output_path: Path to save the video
             fps: Frames per second for the video
+            apply_mask: Whether to apply endoscopic mask to frames
         """
         import cv2
 
@@ -425,10 +467,18 @@ class VideoProcessor:
             for entry in entries:
                 frame_data = entry.output.data
 
+                # Apply mask if enabled (before any processing)
+                if apply_mask and self.mask is not None:
+                    frame_data = self.mask.apply(frame_data)
+
                 # Get frame to write
                 if use_visualisation and 'visualisation' in entry.output.metadata:
                     # Use pre-generated colourmap visualisation
                     frame = entry.output.metadata['visualisation']
+
+                    # Apply mask to visualisation if enabled
+                    if apply_mask and self.mask is not None:
+                        frame = self.mask.apply(frame)
                 elif len(frame_data.shape) == 2:
                     # Single channel - normalise and apply colourmap
                     # Normalise to 0-255
@@ -468,3 +518,77 @@ class VideoProcessor:
             out.release()
 
         print(f"    Video saved to: {output_path.name}")
+
+    def _apply_masking(self, frame: np.ndarray, frame_number: int) -> Optional[np.ndarray]:
+        """
+        Apply endoscopic masking to a frame.
+
+        Collects initial frames for mask detection, then applies the detected mask.
+
+        Args:
+            frame: Input frame
+            frame_number: Frame number
+
+        Returns:
+            Masked frame, or None if still collecting frames for mask detection
+        """
+        if self.mask is None:
+            # Collect frames for mask detection
+            n_frames = self.masking_config.get('n_frames', 10)
+
+            if len(self.frames_for_mask) < n_frames:
+                self.frames_for_mask.append(frame.copy())
+                return None  # Don't process until we have the mask
+
+            # Detect mask
+            print(f"Detecting endoscopic mask from {len(self.frames_for_mask)} frames...")
+            detector = EndoscopicMaskDetector(
+                n_frames=len(self.frames_for_mask),
+                black_threshold=self.masking_config.get('black_threshold', 30),
+                min_valid_ratio=self.masking_config.get('min_valid_ratio', 0.3),
+                morph_kernel_size=self.masking_config.get('morph_kernel_size', 5),
+                circle_fit_method=self.masking_config.get('circle_fit_method', 'hough'),
+            )
+
+            frames_array = np.array(self.frames_for_mask)
+            self.mask = detector.detect_mask_from_frames(frames_array)
+
+            print(f"Mask detected: centre={self.mask.centre}, radius={self.mask.radius:.1f}")
+
+            # Clear frames from memory
+            self.frames_for_mask = []
+
+        # Apply mask
+        return self.mask.apply(frame)
+
+    def _save_mask_visualisation(self) -> None:
+        """Save a visualisation of the detected mask."""
+        if self.mask is None:
+            return
+
+        import cv2
+
+        # Create visualisation with mask overlay
+        h, w = self.mask.mask.shape
+        vis = np.zeros((h, w, 3), dtype=np.uint8)
+
+        # Draw mask as white circle on black background
+        mask_vis = np.stack([self.mask.mask * 255] * 3, axis=-1)
+        vis = mask_vis
+
+        # Draw circle outline and centre point
+        centre_x, centre_y = self.mask.centre
+        radius = int(self.mask.radius)
+
+        cv2.circle(vis, (centre_x, centre_y), radius, (0, 255, 0), 2)
+        cv2.circle(vis, (centre_x, centre_y), 5, (0, 255, 0), -1)
+
+        # Add text with mask info
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        text = f"Centre: {self.mask.centre}, Radius: {self.mask.radius:.1f}"
+        cv2.putText(vis, text, (10, 30), font, 0.7, (0, 255, 0), 2)
+
+        # Save
+        mask_path = self.output_dir / "mask_visualisation.png"
+        cv2.imwrite(str(mask_path), vis)
+        print(f"Mask visualisation saved to: {mask_path.name}")
