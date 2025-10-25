@@ -200,6 +200,31 @@ class VideoProcessor:
         # Save timeline summary
         manifest_builder.set_timeline_summary(self.timeline.get_timeline_summary())
 
+        # Save partial video if frame range was specified
+        if start_frame is not None or end_frame is not None:
+            print("Saving partial video...")
+            partial_video_info = self._save_partial_video(
+                start_frame=actual_start,
+                end_frame=actual_end,
+                apply_mask=self.enable_masking,
+            )
+            if partial_video_info:
+                # Add to manifest as a special model entry
+                from lucidity.base_model import ModelMetadata, OutputType
+                manifest_builder.add_model(
+                    model_metadata=ModelMetadata(
+                        name="partial_video",
+                        version="1.0.0",
+                        description="Partial input video extracted from frame range",
+                        output_type=OutputType.CUSTOM,
+                        output_frequency="video",
+                    ),
+                    output_files=[partial_video_info],
+                    total_outputs=1,
+                    first_timestamp=actual_start / self.video_reader.metadata.fps,
+                    last_timestamp=actual_end / self.video_reader.metadata.fps,
+                )
+
         # Add masking information to manifest and save mask visualisation
         if self.enable_masking and self.mask is not None:
             manifest_builder.set_processing_info("masking", {
@@ -592,3 +617,64 @@ class VideoProcessor:
         mask_path = self.output_dir / "mask_visualisation.png"
         cv2.imwrite(str(mask_path), vis)
         print(f"Mask visualisation saved to: {mask_path.name}")
+
+    def _save_partial_video(
+        self,
+        start_frame: int,
+        end_frame: int,
+        apply_mask: bool = False,
+    ) -> Optional[OutputFileInfo]:
+        """
+        Save a partial video from the original input when processing a frame range.
+
+        Args:
+            start_frame: First frame to include (0-indexed, inclusive)
+            end_frame: Last frame to include (0-indexed, inclusive)
+            apply_mask: Whether to apply endoscopic mask to the frames
+
+        Returns:
+            OutputFileInfo for the saved partial video, or None if failed
+        """
+        import cv2
+
+        output_path = self.output_dir / "partial_video.mp4"
+
+        # Get video metadata
+        width = self.video_reader.metadata.width
+        height = self.video_reader.metadata.height
+        fps = self.video_reader.metadata.fps
+
+        # Create video writer
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
+
+        try:
+            # Read and write frames in the specified range
+            for frame, timestamp, frame_number in self.video_reader.frames(start_frame=start_frame, end_frame=end_frame):
+                # Apply mask if enabled
+                if apply_mask and self.mask is not None:
+                    frame = self.mask.apply(frame)
+
+                # Convert RGB to BGR for OpenCV
+                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+                out.write(frame_bgr)
+
+        finally:
+            out.release()
+
+        # Reset the video reader position
+        self.video_reader.reset()
+
+        total_frames = end_frame - start_frame + 1
+        duration = total_frames / fps
+
+        print(f"Partial video saved: {output_path.name} ({total_frames} frames, {duration:.2f}s)")
+
+        return OutputFileInfo(
+            path=str(output_path.relative_to(self.output_dir)),
+            type="video",
+            format="mp4",
+            description=f"Partial input video (frames {start_frame}-{end_frame}, {total_frames} frames)",
+            size_bytes=output_path.stat().st_size,
+        )
