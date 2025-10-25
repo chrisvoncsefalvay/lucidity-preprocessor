@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m venv:*)",
+      "Bash(.\\venv\\Scripts\\pip.exe install:*)",
+      "Bash(./venv/Scripts/pip.exe install:*)",
+      "Bash(nvidia-smi:*)",
+      "Bash(./venv/Scripts/pip.exe:*)",
+      "Bash(./venv/Scripts/lucidity.exe:*)",
+      "Bash(./venv/Scripts/python.exe:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
