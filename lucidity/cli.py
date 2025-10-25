@@ -45,6 +45,26 @@ def cli():
     is_flag=True,
     help='Disable progress bar',
 )
+@click.option(
+    '--start-time',
+    type=float,
+    help='Start time in seconds (e.g., 10.5 for 10.5 seconds)',
+)
+@click.option(
+    '--end-time',
+    type=float,
+    help='End time in seconds (e.g., 60.0 for 1 minute)',
+)
+@click.option(
+    '--start-frame',
+    type=int,
+    help='Start frame number (0-indexed)',
+)
+@click.option(
+    '--end-frame',
+    type=int,
+    help='End frame number (0-indexed, inclusive)',
+)
 def process(
     video_path: str,
     models: str,
@@ -52,13 +72,29 @@ def process(
     model_config: Optional[str],
     discover_dir: Optional[str],
     no_progress: bool,
+    start_time: Optional[float],
+    end_time: Optional[float],
+    start_frame: Optional[int],
+    end_frame: Optional[int],
 ):
     """
     Process a video with selected models.
 
     Example:
         lucidity process video.mp4 --models pose_detection,scene_segmentation
+
+        # Process only frames 100-500
+        lucidity process video.mp4 --models my_model --start-frame 100 --end-frame 500
+
+        # Process only 10-30 seconds of video
+        lucidity process video.mp4 --models my_model --start-time 10 --end-time 30
     """
+    # Validate that frame and time options are not mixed
+    if (start_time is not None or end_time is not None) and (start_frame is not None or end_frame is not None):
+        click.echo("Error: Cannot mix --start-time/--end-time with --start-frame/--end-frame", err=True)
+        click.echo("Please use either time-based or frame-based options, not both.", err=True)
+        return
+
     # Get plugin manager and discover plugins
     plugin_manager = get_plugin_manager()
 
@@ -86,6 +122,31 @@ def process(
     click.echo(f"Processing video: {video_path}")
     click.echo(f"Output directory: {output}")
     click.echo(f"Models: {', '.join(model_names)}")
+
+    # Convert time ranges to frame ranges if needed
+    frame_range_start = start_frame
+    frame_range_end = end_frame
+
+    if start_time is not None or end_time is not None:
+        # Need to read video metadata to convert timestamps
+        from lucidity.video import VideoReader
+        reader = VideoReader(video_path)
+
+        if start_time is not None:
+            frame_range_start = int(start_time * reader.metadata.fps)
+            click.echo(f"Start time: {start_time}s (frame {frame_range_start})")
+
+        if end_time is not None:
+            frame_range_end = int(end_time * reader.metadata.fps)
+            click.echo(f"End time: {end_time}s (frame {frame_range_end})")
+
+        reader.close()
+    elif start_frame is not None or end_frame is not None:
+        if start_frame is not None:
+            click.echo(f"Start frame: {start_frame}")
+        if end_frame is not None:
+            click.echo(f"End frame: {end_frame}")
+
     click.echo()
 
     processor = VideoProcessor(
@@ -101,7 +162,11 @@ def process(
 
     # Process
     try:
-        manifest_path = processor.process(show_progress=not no_progress)
+        manifest_path = processor.process(
+            show_progress=not no_progress,
+            start_frame=frame_range_start,
+            end_frame=frame_range_end,
+        )
         click.echo(f"\nProcessing complete!")
         click.echo(f"Manifest saved to: {manifest_path}")
     except Exception as e:
