@@ -63,7 +63,8 @@ class PluginManager:
         if not directory.exists() or not directory.is_dir():
             return
 
-        for python_file in directory.glob("*.py"):
+        # Search for Python files recursively in subdirectories
+        for python_file in directory.glob("**/*.py"):
             if python_file.name.startswith("_"):
                 continue
 
