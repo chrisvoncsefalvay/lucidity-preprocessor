@@ -11,6 +11,7 @@ A modular video ML inference pipeline with self-discovering model plugins.
 - JSON manifest for complete output tracking
 - Self-discovery of model plugins as Python packages
 - Endoscopic video masking for circular region detection
+- Sparse optical flow for efficient motion analysis
 
 ## Architecture
 
@@ -94,3 +95,30 @@ masked_frame = mask.apply(frame)
 ```
 
 See [examples/example_masked_model.py](examples/example_masked_model.py) for a complete model implementation.
+
+## Sparse optical flow
+
+Lucidity includes sparse optical flow processing using RAFT for efficient motion analysis in surgical/endoscopic video. The optical flow system:
+
+- Computes dense optical flow using RAFT (Recurrent All-Pairs Field Transforms)
+- Downsamples to sparse grid with configurable stride (8, 16, or 32 pixels)
+- Filters to only vectors inside the circular endoscopic mask
+- Achieves 300-800x storage reduction vs dense flow
+- Provides visualisation utilities for quiver plots and colour-coded flow
+
+For detailed documentation, see [OPTICAL_FLOW.md](OPTICAL_FLOW.md).
+
+Quick CLI example:
+
+```bash
+# Process with sparse optical flow
+lucidity process video.mp4 --models raft_optical_flow --output ./results
+
+# Custom stride for denser sampling
+lucidity process video.mp4 --models raft_optical_flow --flow-stride 8
+
+# Combine with depth estimation
+lucidity process video.mp4 --models raft_optical_flow,endomust_depth
+```
+
+See [examples/optical_flow_cli_example.sh](examples/optical_flow_cli_example.sh) for more examples.
