@@ -46,18 +46,42 @@ pip install torch torchvision>=0.12.0 matplotlib
 Process a video with sparse optical flow:
 
 ```bash
-python -m lucidity.cli process video.mp4 \
+lucidity process video.mp4 \
     --models raft_optical_flow \
     --output ./output
+```
+
+Process with custom stride (denser or sparser sampling):
+
+```bash
+# Dense sampling (more vectors)
+lucidity process video.mp4 \
+    --models raft_optical_flow \
+    --flow-stride 8
+
+# Sparse sampling (fewer vectors, faster)
+lucidity process video.mp4 \
+    --models raft_optical_flow \
+    --flow-stride 32
 ```
 
 Process specific frame range:
 
 ```bash
-python -m lucidity.cli process video.mp4 \
+lucidity process video.mp4 \
     --models raft_optical_flow \
     --start-frame 0 \
     --end-frame 100
+```
+
+Combine with custom mask detection parameters:
+
+```bash
+lucidity process video.mp4 \
+    --models raft_optical_flow \
+    --flow-stride 16 \
+    --mask-threshold 40 \
+    --mask-method contour
 ```
 
 ### Python API

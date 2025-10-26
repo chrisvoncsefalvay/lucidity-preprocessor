@@ -51,6 +51,44 @@ Demonstrates event-based sparse outputs.
 - Variable output frequency
 - Rich metadata per event
 
+### 4. Optical Flow (`optical_flow_cli_example.sh`)
+
+Demonstrates sparse optical flow processing for surgical/endoscopic video.
+
+**Use cases:**
+- Motion analysis in surgical video
+- Instrument movement tracking
+- Scene motion characterisation
+- Pre-processing for downstream ML models
+
+**Output:** Sparse flow vectors (x, y, u, v) within circular mask
+
+**Features:**
+- Automatic circular mask detection
+- Configurable downsampling stride (8, 16, or 32 pixels)
+- Extreme storage efficiency (300-800x reduction vs dense flow)
+- Built-in visualisation utilities
+
+**CLI Examples:**
+```bash
+# Basic optical flow processing
+lucidity process video.mp4 --models raft_optical_flow
+
+# Dense sampling (more vectors)
+lucidity process video.mp4 --models raft_optical_flow --flow-stride 8
+
+# Sparse sampling (fewer vectors, faster)
+lucidity process video.mp4 --models raft_optical_flow --flow-stride 32
+
+# Custom mask detection
+lucidity process video.mp4 --models raft_optical_flow --mask-threshold 40
+
+# Combine with depth estimation
+lucidity process video.mp4 --models raft_optical_flow,endomust_depth
+```
+
+See [OPTICAL_FLOW.md](../OPTICAL_FLOW.md) for complete documentation.
+
 ## Using the Examples
 
 ### 1. Test with an example model

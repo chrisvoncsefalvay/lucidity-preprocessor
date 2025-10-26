@@ -98,6 +98,12 @@ def cli():
     default='hough',
     help='Circle fitting method: hough or contour (default: hough)',
 )
+@click.option(
+    '--flow-stride',
+    type=int,
+    default=16,
+    help='Stride for sparse optical flow sampling in pixels (8, 16, or 32 recommended, default: 16)',
+)
 def process(
     video_path: str,
     models: str,
@@ -115,6 +121,7 @@ def process(
     mask_frames: int,
     mask_threshold: int,
     mask_method: str,
+    flow_stride: int,
 ):
     """
     Process a video with selected models.
@@ -133,6 +140,12 @@ def process(
 
         # Process with custom masking parameters
         lucidity process video.mp4 --models my_model --mask --mask-frames 20 --mask-threshold 40
+
+        # Process with sparse optical flow
+        lucidity process video.mp4 --models raft_optical_flow
+
+        # Process optical flow with custom stride
+        lucidity process video.mp4 --models raft_optical_flow --flow-stride 8
     """
     # Validate that frame and time options are not mixed
     if (start_time is not None or end_time is not None) and (start_frame is not None or end_frame is not None):
@@ -219,8 +232,25 @@ def process(
 
     # Add models
     for model_name in model_names:
-        config = model_configs.get(model_name)
-        processor.add_model(model_name, config)
+        config = model_configs.get(model_name, {}).copy() if model_configs.get(model_name) else {}
+
+        # Auto-configure optical flow model with CLI parameters
+        if model_name == 'raft_optical_flow':
+            # Set flow stride if not already specified in config
+            if 'stride' not in config:
+                config['stride'] = flow_stride
+            if 'mask_threshold' not in config:
+                config['mask_threshold'] = mask_threshold
+            if 'mask_method' not in config:
+                config['mask_method'] = mask_method
+
+            click.echo(f"Optical flow configuration:")
+            click.echo(f"  Stride: {config['stride']} pixels")
+            click.echo(f"  Mask threshold: {config['mask_threshold']}")
+            click.echo(f"  Mask method: {config['mask_method']}")
+            click.echo()
+
+        processor.add_model(model_name, config if config else None)
 
     # Process
     try:
