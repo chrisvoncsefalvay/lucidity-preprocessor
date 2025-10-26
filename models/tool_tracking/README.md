@@ -41,10 +41,21 @@ Example `config.json`:
 {
   "tool_tracking": {
     "confidence_threshold": 0.5,
-    "checkpoint_path": "models/tool_tracking/checkpoints/ckpt/model.ckpt"
+    "checkpoint_path": "models/tool_tracking/checkpoints/ckpt/model.ckpt",
+    "visualize": true,
+    "box_thickness": 2,
+    "font_scale": 0.6
   }
 }
 ```
+
+**Configuration Options**:
+- `confidence_threshold` (default: 0.5): Minimum confidence score for tool detections
+- `checkpoint_path`: Path to the pretrained model checkpoint
+- `include_heatmaps` (default: false): Include 60x107 localization heatmaps in JSON output (warning: significantly increases file size)
+- `visualize` (default: false): When enabled, generates a visualization video with bounding boxes overlaid on the input video
+- `box_thickness` (default: 2): Thickness of bounding box lines in pixels
+- `font_scale` (default: 0.6): Scale factor for label text size
 
 ### With Frame Range
 
@@ -54,7 +65,9 @@ lucidity process video.mp4 --models tool_tracking --start-frame 100 --end-frame 
 
 ## Output Format
 
-The model produces JSON output with the following structure:
+### JSON Detection Data
+
+The model produces JSON output (`outputs.json`) with the following structure:
 
 ```json
 {
@@ -66,8 +79,7 @@ The model produces JSON output with the following structure:
         "tool": "grasper",
         "confidence": 0.85,
         "bbox": [120, 230, 180, 290],
-        "centre": [150, 260],
-        "heatmap": [[...]]
+        "centre": [150, 260]
       }
     ],
     "num_tools": 1
@@ -85,6 +97,24 @@ The model produces JSON output with the following structure:
 }
 ```
 
+**Note**: When `include_heatmaps: true` is set, each detection will also include a `"heatmap"` field containing the 60x107 localization heatmap as a nested array. This is disabled by default as it significantly increases JSON file size (e.g. 41 MB vs 100 KB for 101 frames).
+
+### Visualization Video
+
+When `visualize: true` is set in the configuration, the model also generates a visualization video (`visualization.mp4`) showing:
+- Colour-coded bounding boxes for each detected tool
+- Tool labels with confidence scores
+- Frame-by-frame tracking of surgical instruments
+
+**Tool Colour Coding**:
+- Grasper: Green
+- Bipolar forceps: Blue
+- Hook: Yellow
+- Scissors: Magenta
+- Clipper: Orange
+- Irrigator: Cyan
+- Specimen bag: Purple
+
 ## Installation
 
 ### Requirements
@@ -101,14 +131,15 @@ pip install tensorflow>=2.16.0 tf-keras numpy opencv-python
 
 ### Current Status
 
-**Note**: This model is currently being migrated from TensorFlow 1.x to TensorFlow 2.x. The migration includes compatibility updates for:
-- ✅ Plugin discovery and integration
-- ✅ Basic model structure (ResNet, ConvLSTM)
-- ✅ Import paths and module loading
-- ✅ TF2 API compatibility for layers, variable scopes, get_variable
-- ⏳ GraphKeys and additional TF1 APIs (work in progress)
+**Status**: Fully operational with TensorFlow 2.x
 
-The model is discoverable via CLI but full inference requires completing the TF2 migration.
+The model has been successfully migrated from TensorFlow 1.x to TensorFlow 2.x with complete compatibility:
+- ✅ Plugin discovery and integration
+- ✅ Model structure (ResNet-18, ConvLSTM, FCN)
+- ✅ TF2 API compatibility (layers, variable scopes, RNN cells)
+- ✅ Checkpoint loading and weight restoration
+- ✅ Full inference pipeline
+- ✅ Bounding box visualization
 
 ## Pretrained Weights
 

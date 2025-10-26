@@ -51,6 +51,10 @@ class ToolTrackingModel(BaseModel):
                 - input_height: Input frame height (default: 480)
                 - input_width: Input frame width (default: 854)
                 - confidence_threshold: Minimum confidence for detections (default: 0.5)
+                - visualize: Whether to draw bounding boxes on frames (default: False)
+                - box_thickness: Thickness of bounding box lines (default: 2)
+                - font_scale: Scale of label text (default: 0.6)
+                - include_heatmaps: Whether to include localization heatmaps in output (default: False)
         """
         super().__init__(config)
         self.config = config or {}
@@ -64,6 +68,14 @@ class ToolTrackingModel(BaseModel):
         self.input_height = self.config.get('input_height', 480)
         self.input_width = self.config.get('input_width', 854)
         self.confidence_threshold = self.config.get('confidence_threshold', 0.5)
+
+        # Output parameters
+        self.include_heatmaps = self.config.get('include_heatmaps', False)
+
+        # Visualization parameters
+        self.visualize = self.config.get('visualize', False)
+        self.box_thickness = self.config.get('box_thickness', 2)
+        self.font_scale = self.config.get('font_scale', 0.6)
 
         # TensorFlow session and graph
         self.session = None
@@ -252,6 +264,88 @@ class ToolTrackingModel(BaseModel):
             # Restore weights
             saver.restore(self.session, self.checkpoint_path)
 
+    def _draw_bounding_boxes(
+        self,
+        frame: np.ndarray,
+        detections: list
+    ) -> np.ndarray:
+        """
+        Draw bounding boxes and labels on the frame.
+
+        Args:
+            frame: RGB frame as numpy array (H, W, 3)
+            detections: List of detection dictionaries with 'bbox', 'tool', 'confidence'
+
+        Returns:
+            Frame with bounding boxes drawn
+        """
+        import cv2
+
+        # Create a copy to avoid modifying the original
+        vis_frame = frame.copy()
+
+        # Define colours for each tool class (in BGR for OpenCV)
+        tool_colours = {
+            'grasper': (0, 255, 0),      # Green
+            'bipolar': (255, 0, 0),      # Blue
+            'hook': (0, 255, 255),       # Yellow
+            'scissors': (255, 0, 255),   # Magenta
+            'clipper': (0, 165, 255),    # Orange
+            'irrigator': (255, 255, 0),  # Cyan
+            'specimen_bag': (128, 0, 128) # Purple
+        }
+
+        for detection in detections:
+            x1, y1, x2, y2 = detection['bbox']
+            tool_name = detection['tool']
+            confidence = detection['confidence']
+
+            # Get colour for this tool
+            colour = tool_colours.get(tool_name, (255, 255, 255))
+
+            # Draw bounding box
+            cv2.rectangle(
+                vis_frame,
+                (x1, y1),
+                (x2, y2),
+                colour,
+                self.box_thickness
+            )
+
+            # Prepare label text
+            label = f"{tool_name}: {confidence:.2f}"
+
+            # Get text size for background
+            (text_width, text_height), baseline = cv2.getTextSize(
+                label,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                self.font_scale,
+                1
+            )
+
+            # Draw label background
+            cv2.rectangle(
+                vis_frame,
+                (x1, y1 - text_height - baseline - 5),
+                (x1 + text_width, y1),
+                colour,
+                -1  # Filled
+            )
+
+            # Draw label text
+            cv2.putText(
+                vis_frame,
+                label,
+                (x1, y1 - baseline - 2),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                self.font_scale,
+                (0, 0, 0),  # Black text
+                1,
+                cv2.LINE_AA
+            )
+
+        return vis_frame
+
     def process_frame(
         self,
         frame: np.ndarray,
@@ -330,16 +424,35 @@ class ToolTrackingModel(BaseModel):
                         x2 = min(frame.shape[1], cx + box_size)
                         y2 = min(frame.shape[0], cy + box_size)
 
-                    detections.append({
+                    # Build detection dict
+                    detection = {
                         'tool': TOOL_CLASSES[tool_idx],
                         'confidence': confidence,
                         'bbox': [x1, y1, x2, y2],
                         'centre': [cx, cy],
-                        'heatmap': heatmap.tolist(),
-                    })
+                    }
+
+                    # Optionally include heatmap (can significantly increase JSON size)
+                    if self.include_heatmaps:
+                        detection['heatmap'] = heatmap.tolist()
+
+                    detections.append(detection)
 
             # Increment seek counter for temporal tracking
             self.current_seek += 1
+
+            # Draw bounding boxes if visualization is enabled
+            metadata = {
+                'seek': self.current_seek,
+                'all_probabilities': {
+                    TOOL_CLASSES[i]: float(probabilities[i])
+                    for i in range(self.num_classes)
+                }
+            }
+
+            if self.visualize and len(detections) > 0:
+                vis_frame = self._draw_bounding_boxes(frame, detections)
+                metadata['visualized_frame'] = vis_frame
 
             return ModelOutput(
                 timestamp=timestamp,
@@ -349,13 +462,7 @@ class ToolTrackingModel(BaseModel):
                     'num_tools': len(detections),
                 },
                 confidence=float(probabilities.max()) if len(detections) > 0 else 0.0,
-                metadata={
-                    'seek': self.current_seek,
-                    'all_probabilities': {
-                        TOOL_CLASSES[i]: float(probabilities[i])
-                        for i in range(self.num_classes)
-                    }
-                },
+                metadata=metadata,
             )
 
         except Exception as e:

@@ -1,0 +1,8 @@
+{
+  "tool_tracking": {
+    "confidence_threshold": 0.5,
+    "visualize": true,
+    "box_thickness": 2,
+    "font_scale": 0.6
+  }
+}

@@ -25,13 +25,17 @@ TF_VERSION = int(tf.__version__.split('.')[0])
 if TF_VERSION >= 2:
     tf_variable_scope = tf.compat.v1.variable_scope
     tf_get_variable = tf.compat.v1.get_variable
+    tf_get_variable_scope = tf.compat.v1.get_variable_scope
     tf_get_collection = tf.compat.v1.get_collection
     tf_add_to_collection = tf.compat.v1.add_to_collection
+    GraphKeys = tf.compat.v1.GraphKeys
 else:
     tf_variable_scope = tf.variable_scope
     tf_get_variable = tf.get_variable
+    tf_get_variable_scope = tf.get_variable_scope
     tf_get_collection = tf.get_collection
     tf_add_to_collection = tf.add_to_collection
+    GraphKeys = tf.GraphKeys
 
 ## TensorFlow helper functions
 
@@ -195,10 +199,10 @@ def _add_split_loss(w, input_q, output_q):
     tf_add_to_collection('WEIGHT_SPLIT', S)
 
     # Add histogram for w if split losses are added
-    scope_name = tf.get_variable_scope().name
+    scope_name = tf_get_variable_scope().name
     tf.histogram_summary("%s/weights" % scope_name, w)
     print('\t\tAdd split loss for %s(%dx%d, %d groups)' \
-          % (tf.get_variable_scope().name, in_dim, out_dim, ngroups))
+          % (tf_get_variable_scope().name, in_dim, out_dim, ngroups))
 
     return
 
@@ -231,8 +235,8 @@ def _bn(x, is_train, global_step=None, name='bn'):
             # update_mu = mu.assign_sub(update*(mu - batch_mean))
         update_mu = mu.assign_sub(update*(mu - batch_mean))
         update_sigma = sigma.assign_sub(update*(sigma - batch_var))
-        tf_add_to_collection(tf.GraphKeys.UPDATE_OPS, update_mu)
-        tf_add_to_collection(tf.GraphKeys.UPDATE_OPS, update_sigma)
+        tf_add_to_collection(GraphKeys.UPDATE_OPS, update_mu)
+        tf_add_to_collection(GraphKeys.UPDATE_OPS, update_sigma)
 
         mean, var = tf.cond(is_train, lambda: (batch_mean, batch_var),
                             lambda: (mu, sigma))

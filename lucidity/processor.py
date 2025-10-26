@@ -327,13 +327,25 @@ class VideoProcessor:
             data_file = output_dir / "outputs.json"
             outputs_data = []
 
+            # Check if visualization frames are available
+            has_visualization = any(
+                'visualized_frame' in entry.output.metadata
+                for entry in entries
+            )
+
             for entry in entries:
+                # Remove visualized_frame from metadata before serializing to JSON
+                # (numpy arrays are not JSON serializable)
+                metadata_copy = entry.output.metadata.copy()
+                if 'visualized_frame' in metadata_copy:
+                    metadata_copy.pop('visualized_frame')
+
                 output_dict = {
                     "timestamp": entry.timestamp,
                     "frame_number": entry.frame_number,
                     "data": self._serialize_data(entry.output.data),
                     "confidence": entry.output.confidence,
-                    "metadata": entry.output.metadata,
+                    "metadata": metadata_copy,
                 }
                 outputs_data.append(output_dict)
 
@@ -347,6 +359,22 @@ class VideoProcessor:
                 description=f"Structured outputs ({len(entries)} items)",
                 size_bytes=data_file.stat().st_size,
             ))
+
+            # Save visualization video if available
+            if has_visualization:
+                vis_video_path = output_dir / "visualization.mp4"
+                self._save_visualization_video(
+                    entries=entries,
+                    output_path=vis_video_path,
+                    fps=output_fps or 30.0,
+                )
+                output_files.append(OutputFileInfo(
+                    path=str(vis_video_path.relative_to(self.output_dir)),
+                    type="video",
+                    format="mp4",
+                    description=f"Visualization video ({len(entries)} frames @ {output_fps or 30.0} fps)",
+                    size_bytes=vis_video_path.stat().st_size,
+                ))
 
         elif metadata.output_type in [OutputType.EMBEDDING, OutputType.TIMESERIES]:
             # Save as numpy array
@@ -543,6 +571,55 @@ class VideoProcessor:
             out.release()
 
         print(f"    Video saved to: {output_path.name}")
+
+    def _save_visualization_video(
+        self,
+        entries: List,
+        output_path: Path,
+        fps: float,
+    ) -> None:
+        """
+        Save visualization frames as a video file.
+
+        Args:
+            entries: List of processed frames with visualized_frame in metadata
+            output_path: Path to save the video
+            fps: Frames per second for the output video
+        """
+        import cv2
+
+        # Get dimensions from first visualized frame
+        first_vis_frame = None
+        for entry in entries:
+            if 'visualized_frame' in entry.output.metadata:
+                first_vis_frame = entry.output.metadata['visualized_frame']
+                break
+
+        if first_vis_frame is None:
+            raise ValueError("No visualized frames found in entries")
+
+        height, width = first_vis_frame.shape[:2]
+
+        # Create video writer
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
+
+        try:
+            for entry in entries:
+                if 'visualized_frame' in entry.output.metadata:
+                    vis_frame = entry.output.metadata['visualized_frame']
+
+                    # Ensure frame is the right size
+                    if vis_frame.shape[:2] != (height, width):
+                        vis_frame = cv2.resize(vis_frame, (width, height))
+
+                    # Visualized frames are already in BGR format from OpenCV drawing
+                    out.write(vis_frame)
+
+        finally:
+            out.release()
+
+        print(f"    Visualization video saved to: {output_path.name}")
 
     def _apply_masking(self, frame: np.ndarray, frame_number: int) -> Optional[np.ndarray]:
         """

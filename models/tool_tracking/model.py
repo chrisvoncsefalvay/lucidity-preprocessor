@@ -87,7 +87,8 @@ class Model(object):
     
     def _spatial_pooling(self, x, name='spatial_pooling'):
         with tf.name_scope(name):
-            return tf.reduce_max(x, reduction_indices=[1,2]) + 0.6*tf.reduce_min(x, reduction_indices=[1,2])
+            # TF2: reduction_indices renamed to axis
+            return tf.reduce_max(x, axis=[1,2]) + 0.6*tf.reduce_min(x, axis=[1,2])
     
     
     def _locnet(self, x, kernel=1, filters=7, strides=1, name='conv6'):
