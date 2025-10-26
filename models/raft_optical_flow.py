@@ -217,7 +217,7 @@ class RAFTOpticalFlowModel(BaseModel):
                 "num_vectors": len(sparse_flow['x']),
                 "stride": self.stride,
                 "mask_radius": float(self.mask.radius) if self.mask else 0.0,
-                "mask_centre": [float(self.mask.centre_x), float(self.mask.centre_y)] if self.mask else [0.0, 0.0],
+                "mask_centre": [float(self.mask.centre[0]), float(self.mask.centre[1])] if self.mask else [0.0, 0.0],
                 "flow_magnitude_mean": mean_mag,
                 "flow_magnitude_max": max_mag,
                 "flow_magnitude_std": std_mag,
@@ -246,7 +246,7 @@ class RAFTOpticalFlowModel(BaseModel):
         self.mask = detector.detect_mask_from_frames(frames_array)
 
         if self.mask:
-            print(f"  - Mask detected: centre=({self.mask.centre_x:.1f}, {self.mask.centre_y:.1f}), radius={self.mask.radius:.1f}")
+            print(f"  - Mask detected: centre=({self.mask.centre[0]:.1f}, {self.mask.centre[1]:.1f}), radius={self.mask.radius:.1f}")
         else:
             print(f"  - No mask detected, using full frame")
 
@@ -281,8 +281,8 @@ class RAFTOpticalFlowModel(BaseModel):
         # Filter to only include vectors inside mask
         if self.mask is not None:
             # Calculate distance from mask centre
-            dx = x_flat - self.mask.centre_x
-            dy = y_flat - self.mask.centre_y
+            dx = x_flat - self.mask.centre[0]
+            dy = y_flat - self.mask.centre[1]
             dist = np.sqrt(dx**2 + dy**2)
 
             # Keep only vectors inside mask
