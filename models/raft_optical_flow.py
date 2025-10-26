@@ -73,6 +73,7 @@ class RAFTOpticalFlowModel(BaseModel):
         self.previous_frame = None
         self.mask = None
         self.frame_for_mask = None
+        self.original_shape = None  # Store original frame shape
 
         # Model configuration
         self.model_size = self.config.get('model_size', 'small')  # 'small' or 'large'
@@ -166,12 +167,16 @@ class RAFTOpticalFlowModel(BaseModel):
         if self.model is None:
             raise RuntimeError("Model not initialised. Call initialize() first.")
 
+        # Store original shape on first frame
+        if self.original_shape is None:
+            self.original_shape = frame.shape[:2]  # (H, W)
+
         # Detect mask on first frame
         if self.mask is None:
             self._detect_mask(frame)
 
-        # Convert frame to tensor
-        current_tensor = self._preprocess_frame(frame)
+        # Convert frame to tensor (handles padding to divisible by 8)
+        current_tensor, pad_info = self._preprocess_frame(frame)
 
         # Skip first frame (no previous frame to compare)
         if self.previous_frame is None:
@@ -188,10 +193,13 @@ class RAFTOpticalFlowModel(BaseModel):
             flow_predictions = self.model(prev_frame_255, curr_frame_255)
 
             # Get the final flow prediction (after all iterations)
-            flow = flow_predictions[-1]  # Shape: (1, 2, H, W)
+            flow = flow_predictions[-1]  # Shape: (1, 2, H_padded, W_padded)
 
         # Convert to numpy (1, 2, H, W) -> (H, W, 2)
         flow_dense = flow.squeeze(0).permute(1, 2, 0).cpu().numpy()
+
+        # Remove padding from flow to get back to original size
+        flow_dense = self._unpad_flow(flow_dense, pad_info)
 
         # Downsample and filter flow to sparse vectors inside mask
         sparse_flow = self._extract_sparse_flow(flow_dense)
@@ -300,16 +308,42 @@ class RAFTOpticalFlowModel(BaseModel):
             'v': v_flat.astype(np.float32),
         }
 
-    def _preprocess_frame(self, frame: np.ndarray) -> torch.Tensor:
+    def _preprocess_frame(self, frame: np.ndarray) -> Tuple[torch.Tensor, dict]:
         """
         Preprocess frame for RAFT model.
+
+        RAFT requires dimensions divisible by 8. This method pads the frame
+        if necessary and returns padding information.
 
         Args:
             frame: RGB frame as numpy array (H, W, 3)
 
         Returns:
-            Preprocessed tensor (1, 3, H, W) normalised to [0, 1]
+            Tuple of (preprocessed tensor, padding info dict)
+            - tensor: (1, 3, H_padded, W_padded) normalised to [0, 1]
+            - pad_info: dict with 'top', 'bottom', 'left', 'right' padding values
         """
+        h, w = frame.shape[:2]
+
+        # Calculate padding needed to make dimensions divisible by 8
+        pad_h = (8 - h % 8) % 8
+        pad_w = (8 - w % 8) % 8
+
+        # Split padding evenly on both sides
+        pad_top = pad_h // 2
+        pad_bottom = pad_h - pad_top
+        pad_left = pad_w // 2
+        pad_right = pad_w - pad_left
+
+        # Pad the frame if needed
+        if pad_h > 0 or pad_w > 0:
+            frame = np.pad(
+                frame,
+                ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)),
+                mode='constant',
+                constant_values=0
+            )
+
         # Convert to float and normalise to [0, 1]
         frame_float = frame.astype(np.float32) / 255.0
 
@@ -317,7 +351,41 @@ class RAFTOpticalFlowModel(BaseModel):
         tensor = torch.from_numpy(frame_float).permute(2, 0, 1).unsqueeze(0)
         tensor = tensor.to(self.device)
 
-        return tensor
+        pad_info = {
+            'top': pad_top,
+            'bottom': pad_bottom,
+            'left': pad_left,
+            'right': pad_right,
+        }
+
+        return tensor, pad_info
+
+    def _unpad_flow(self, flow: np.ndarray, pad_info: dict) -> np.ndarray:
+        """
+        Remove padding from flow field to restore original dimensions.
+
+        Args:
+            flow: Padded flow field (H_padded, W_padded, 2)
+            pad_info: Padding info from _preprocess_frame
+
+        Returns:
+            Unpadded flow field (H_original, W_original, 2)
+        """
+        top = pad_info['top']
+        bottom = pad_info['bottom']
+        left = pad_info['left']
+        right = pad_info['right']
+
+        h, w = flow.shape[:2]
+
+        # Calculate crop boundaries
+        h_end = h - bottom if bottom > 0 else h
+        w_end = w - right if right > 0 else w
+
+        # Crop the flow
+        flow = flow[top:h_end, left:w_end]
+
+        return flow
 
     def cleanup(self) -> None:
         """Cleanup resources."""
