@@ -58,11 +58,14 @@ def test_optical_flow():
         plugin_manager=plugin_manager,
     )
 
-    # Add optical flow model
-    print("\nAdding RAFT optical flow model...")
+    # Add optical flow model with sparse configuration
+    print("\nAdding RAFT sparse optical flow model...")
     processor.add_model("raft_optical_flow", config={
         "model_size": "small",  # Use small model for faster processing
         "num_flow_updates": 12,
+        "stride": 16,  # Sample every 16 pixels
+        "mask_threshold": 30,
+        "mask_method": "hough",
     })
 
     # Process first 30 frames
@@ -71,7 +74,6 @@ def test_optical_flow():
         show_progress=True,
         start_frame=0,
         end_frame=29,
-        output_format='compressed',  # Use compressed format for efficient storage
     )
 
     print(f"\nProcessing complete!")
@@ -100,29 +102,77 @@ def test_optical_flow():
                 size_mb = output_file.size_bytes / (1024 * 1024)
                 print(f"      Size: {size_mb:.2f} MB")
 
-    # Calculate compression ratio if possible
+    # Calculate storage efficiency for sparse flow
     if manifest.model_outputs:
         for model_name, model_output in manifest.model_outputs.items():
             if model_output.output_files:
-                npz_file = None
+                json_file = None
                 for output_file in model_output.output_files:
-                    if output_file.format == "npz":
-                        npz_file = Path(output_dir) / output_file.path
+                    if output_file.format == "json":
+                        json_file = Path(output_dir) / output_file.path
                         break
 
-                if npz_file and npz_file.exists():
-                    # Load and calculate uncompressed size
-                    with np.load(npz_file) as data:
-                        if 'frames' in data:
-                            frames = data['frames']
-                            uncompressed_size = frames.nbytes
-                            compressed_size = npz_file.stat().st_size
-                            ratio = uncompressed_size / compressed_size
+                if json_file and json_file.exists():
+                    # Load sparse flow data
+                    import json
+                    with open(json_file, 'r') as f:
+                        flow_data = json.load(f)
 
-                            print(f"\n  Compression statistics:")
-                            print(f"    Uncompressed size: {uncompressed_size / (1024 * 1024):.2f} MB")
-                            print(f"    Compressed size: {compressed_size / (1024 * 1024):.2f} MB")
-                            print(f"    Compression ratio: {ratio:.2f}x")
+                    # Count total vectors
+                    total_vectors = sum(len(entry['data']['x']) for entry in flow_data)
+                    avg_vectors_per_frame = total_vectors / len(flow_data) if flow_data else 0
+
+                    # Estimate what dense flow would have cost
+                    # Assuming 1920x1080 resolution, stride=16 would give ~8100 vectors per frame
+                    # Dense flow would be 1920*1080*2*4 bytes = 16.6 MB per frame
+                    from lucidity.video import VideoReader
+                    video_reader = VideoReader(test_video)
+                    h, w = video_reader.metadata.height, video_reader.metadata.width
+                    dense_size_per_frame = h * w * 2 * 4  # 2 channels, 4 bytes per float32
+                    dense_total_size = dense_size_per_frame * len(flow_data)
+
+                    # Actual sparse size
+                    sparse_size = json_file.stat().st_size
+
+                    # Calculate reduction
+                    reduction_ratio = dense_total_size / sparse_size if sparse_size > 0 else 0
+
+                    print(f"\n  Storage efficiency:")
+                    print(f"    Average vectors per frame: {avg_vectors_per_frame:.0f}")
+                    print(f"    Total vectors: {total_vectors}")
+                    print(f"    Dense equivalent size: {dense_total_size / (1024 * 1024):.2f} MB")
+                    print(f"    Sparse storage size: {sparse_size / (1024 * 1024):.2f} MB")
+                    print(f"    Storage reduction: {reduction_ratio:.2f}x")
+
+                    # Test visualization
+                    if flow_data and len(flow_data) > 0:
+                        print(f"\n  Creating sample visualisations...")
+                        from lucidity.flow_plotting import render_sparse_flow_on_frame
+
+                        # Get middle frame
+                        mid_idx = len(flow_data) // 2
+                        mid_frame_num = flow_data[mid_idx]['frame_number']
+
+                        # Read that frame
+                        video_reader = VideoReader(test_video)
+                        for frame_info in video_reader.read_frames(start_frame=mid_frame_num, end_frame=mid_frame_num):
+                            frame = frame_info.frame
+                            sparse_flow_data = flow_data[mid_idx]['data']
+
+                            # Render flow on frame
+                            vis_frame = render_sparse_flow_on_frame(
+                                sparse_flow_data,
+                                frame,
+                                scale=2.0,
+                                color=(0, 255, 255),  # Cyan
+                                thickness=2,
+                            )
+
+                            # Save visualization
+                            import cv2
+                            vis_path = Path(output_dir) / "flow_visualization_sample.png"
+                            cv2.imwrite(str(vis_path), cv2.cvtColor(vis_frame, cv2.COLOR_RGB2BGR))
+                            print(f"    Saved visualisation: {vis_path}")
 
 
 if __name__ == '__main__':

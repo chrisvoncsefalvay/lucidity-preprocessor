@@ -2,7 +2,13 @@
 RAFT optical flow model plugin for lucidity.
 
 This model uses the RAFT (Recurrent All-Pairs Field Transforms) model from
-torchvision to compute dense optical flow between consecutive frames.
+torchvision to compute sparse optical flow within the circular mask region.
+
+The model:
+- Computes dense optical flow between consecutive frames
+- Downsamples to a sparse grid for efficiency
+- Filters vectors to only those inside the circular mask
+- Stores flow vectors with their coordinates
 
 Reference: https://pytorch.org/vision/stable/models/optical_flow.html
 """
@@ -10,10 +16,11 @@ Reference: https://pytorch.org/vision/stable/models/optical_flow.html
 import numpy as np
 import torch
 import cv2
-from typing import Optional
+from typing import Optional, Tuple
 import torchvision.transforms.functional as F
 
 from lucidity.base_model import BaseModel, ModelMetadata, ModelOutput, OutputType
+from lucidity.masking import CircularMask
 
 try:
     from torchvision.models.optical_flow import raft_small, raft_large
@@ -52,10 +59,11 @@ def flow_to_rgb(flow: np.ndarray) -> np.ndarray:
 
 class RAFTOpticalFlowModel(BaseModel):
     """
-    RAFT optical flow model for dense motion estimation.
+    RAFT optical flow model for sparse motion estimation within mask.
 
     This model computes optical flow between consecutive frames using the
-    RAFT architecture. The first frame produces no output (no previous frame).
+    RAFT architecture, then downsamples and filters to only vectors inside
+    the circular mask region. The first frame produces no output.
     """
 
     def __init__(self, config: Optional[dict] = None):
@@ -63,6 +71,8 @@ class RAFTOpticalFlowModel(BaseModel):
         self.model = None
         self.device = None
         self.previous_frame = None
+        self.mask = None
+        self.frame_for_mask = None
 
         # Model configuration
         self.model_size = self.config.get('model_size', 'small')  # 'small' or 'large'
@@ -71,14 +81,19 @@ class RAFTOpticalFlowModel(BaseModel):
         # Flow computation parameters
         self.num_flow_updates = self.config.get('num_flow_updates', 12)  # RAFT iterations
 
+        # Sparse flow configuration
+        self.stride = self.config.get('stride', 16)  # Sample every Nth pixel (8, 16, or 32)
+        self.mask_threshold = self.config.get('mask_threshold', 30)  # Black threshold for masking
+        self.mask_method = self.config.get('mask_method', 'hough')  # 'hough' or 'contour'
+
     def get_metadata(self) -> ModelMetadata:
         """Return metadata about this model."""
         return ModelMetadata(
             name="raft_optical_flow",
-            version="1.0.0",
-            description="RAFT dense optical flow estimation between consecutive frames",
+            version="2.0.0",
+            description=f"RAFT sparse optical flow (stride={self.stride}) within circular mask",
             author="Princeton Vision Lab (RAFT), adapted for Lucidity",
-            output_type=OutputType.FRAME,
+            output_type=OutputType.CUSTOM,  # Sparse vectors, not full frame
             output_frequency="per_frame",
             frame_rate=None,  # Same as input video
             dependencies=["torch", "torchvision>=0.12.0", "opencv-python", "numpy"],
@@ -86,10 +101,13 @@ class RAFTOpticalFlowModel(BaseModel):
 
     def initialize(self) -> None:
         """Initialise the RAFT model and load pretrained weights."""
-        print(f"Initialising RAFT optical flow model...")
+        print(f"Initialising RAFT sparse optical flow model...")
         print(f"Configuration:")
         print(f"  - Model size: {self.model_size}")
         print(f"  - Flow updates: {self.num_flow_updates}")
+        print(f"  - Sampling stride: {self.stride} pixels")
+        print(f"  - Mask threshold: {self.mask_threshold}")
+        print(f"  - Mask method: {self.mask_method}")
 
         # Set device
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -135,7 +153,7 @@ class RAFTOpticalFlowModel(BaseModel):
         frame_number: int,
     ) -> Optional[ModelOutput]:
         """
-        Process a single frame and generate optical flow from previous frame.
+        Process a single frame and generate sparse optical flow within mask.
 
         Args:
             frame: RGB frame as numpy array (H, W, 3)
@@ -143,10 +161,14 @@ class RAFTOpticalFlowModel(BaseModel):
             frame_number: Frame number in the video
 
         Returns:
-            ModelOutput with optical flow data, or None for the first frame
+            ModelOutput with sparse flow vectors, or None for the first frame
         """
         if self.model is None:
             raise RuntimeError("Model not initialised. Call initialize() first.")
+
+        # Detect mask on first frame
+        if self.mask is None:
+            self._detect_mask(frame)
 
         # Convert frame to tensor
         current_tensor = self._preprocess_frame(frame)
@@ -169,32 +191,112 @@ class RAFTOpticalFlowModel(BaseModel):
             flow = flow_predictions[-1]  # Shape: (1, 2, H, W)
 
         # Convert to numpy (1, 2, H, W) -> (H, W, 2)
-        flow_np = flow.squeeze(0).permute(1, 2, 0).cpu().numpy()
+        flow_dense = flow.squeeze(0).permute(1, 2, 0).cpu().numpy()
 
-        # Compute flow statistics
-        flow_magnitude = np.sqrt(flow_np[..., 0]**2 + flow_np[..., 1]**2)
-
-        # Generate visualisation
-        flow_vis = flow_to_rgb(flow_np)
+        # Downsample and filter flow to sparse vectors inside mask
+        sparse_flow = self._extract_sparse_flow(flow_dense)
 
         # Update previous frame for next iteration
         self.previous_frame = current_tensor
 
+        # Compute statistics
+        if len(sparse_flow['x']) > 0:
+            magnitudes = np.sqrt(sparse_flow['u']**2 + sparse_flow['v']**2)
+            mean_mag = float(magnitudes.mean())
+            max_mag = float(magnitudes.max())
+            std_mag = float(magnitudes.std())
+        else:
+            mean_mag = max_mag = std_mag = 0.0
+
         return ModelOutput(
             timestamp=timestamp,
             frame_number=frame_number,
-            data=flow_np,  # Return the actual flow field (H, W, 2)
-            confidence=None,  # RAFT doesn't provide per-pixel confidence
+            data=sparse_flow,  # Sparse flow vectors with coordinates
+            confidence=None,
             metadata={
-                "flow_shape": flow_np.shape,
-                "flow_magnitude_mean": float(flow_magnitude.mean()),
-                "flow_magnitude_max": float(flow_magnitude.max()),
-                "flow_magnitude_std": float(flow_magnitude.std()),
-                "flow_u_range": [float(flow_np[..., 0].min()), float(flow_np[..., 0].max())],
-                "flow_v_range": [float(flow_np[..., 1].min()), float(flow_np[..., 1].max())],
-                "visualisation": flow_vis,  # RGB visualisation
+                "num_vectors": len(sparse_flow['x']),
+                "stride": self.stride,
+                "mask_radius": float(self.mask.radius) if self.mask else 0.0,
+                "mask_centre": [float(self.mask.centre_x), float(self.mask.centre_y)] if self.mask else [0.0, 0.0],
+                "flow_magnitude_mean": mean_mag,
+                "flow_magnitude_max": max_mag,
+                "flow_magnitude_std": std_mag,
             },
         )
+
+    def _detect_mask(self, frame: np.ndarray) -> None:
+        """
+        Detect circular mask from the first frame.
+
+        Args:
+            frame: RGB frame as numpy array (H, W, 3)
+        """
+        from lucidity.masking import EndoscopicMaskDetector
+
+        print(f"Detecting circular mask for optical flow filtering...")
+
+        detector = EndoscopicMaskDetector(
+            threshold=self.mask_threshold,
+            method=self.mask_method,
+        )
+
+        # Use single frame for detection
+        self.mask = detector.detect_from_frames([frame])
+
+        if self.mask:
+            print(f"  - Mask detected: centre=({self.mask.centre_x:.1f}, {self.mask.centre_y:.1f}), radius={self.mask.radius:.1f}")
+        else:
+            print(f"  - No mask detected, using full frame")
+
+    def _extract_sparse_flow(self, flow_dense: np.ndarray) -> dict:
+        """
+        Extract sparse flow vectors from dense flow field.
+
+        Downsamples the flow field by stride and filters to only include
+        vectors inside the circular mask.
+
+        Args:
+            flow_dense: Dense flow field (H, W, 2)
+
+        Returns:
+            Dictionary with 'x', 'y', 'u', 'v' arrays for sparse vectors
+        """
+        h, w = flow_dense.shape[:2]
+
+        # Create sampling grid
+        y_coords = np.arange(0, h, self.stride)
+        x_coords = np.arange(0, w, self.stride)
+        yy, xx = np.meshgrid(y_coords, x_coords, indexing='ij')
+
+        # Flatten coordinates
+        x_flat = xx.flatten()
+        y_flat = yy.flatten()
+
+        # Sample flow at these coordinates
+        u_flat = flow_dense[y_flat, x_flat, 0]
+        v_flat = flow_dense[y_flat, x_flat, 1]
+
+        # Filter to only include vectors inside mask
+        if self.mask is not None:
+            # Calculate distance from mask centre
+            dx = x_flat - self.mask.centre_x
+            dy = y_flat - self.mask.centre_y
+            dist = np.sqrt(dx**2 + dy**2)
+
+            # Keep only vectors inside mask
+            inside_mask = dist <= self.mask.radius
+
+            x_flat = x_flat[inside_mask]
+            y_flat = y_flat[inside_mask]
+            u_flat = u_flat[inside_mask]
+            v_flat = v_flat[inside_mask]
+
+        return {
+            'x': x_flat.astype(np.float32),
+            'y': y_flat.astype(np.float32),
+            'u': u_flat.astype(np.float32),
+            'v': v_flat.astype(np.float32),
+        }
 
     def _preprocess_frame(self, frame: np.ndarray) -> torch.Tensor:
         """
