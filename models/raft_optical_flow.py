@@ -236,12 +236,14 @@ class RAFTOpticalFlowModel(BaseModel):
         print(f"Detecting circular mask for optical flow filtering...")
 
         detector = EndoscopicMaskDetector(
-            threshold=self.mask_threshold,
-            method=self.mask_method,
+            n_frames=1,  # Just use this one frame
+            black_threshold=self.mask_threshold,
+            circle_fit_method=self.mask_method,
         )
 
-        # Use single frame for detection
-        self.mask = detector.detect_from_frames([frame])
+        # Use single frame for detection (needs to be array with shape (1, H, W, 3))
+        frames_array = np.expand_dims(frame, axis=0)
+        self.mask = detector.detect_mask_from_frames(frames_array)
 
         if self.mask:
             print(f"  - Mask detected: centre=({self.mask.centre_x:.1f}, {self.mask.centre_y:.1f}), radius={self.mask.radius:.1f}")
