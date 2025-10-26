@@ -300,6 +300,56 @@ class VideoProcessor:
                     description=f"Video output ({len(entries)} frames @ {output_fps or 30.0} fps)",
                     size_bytes=video_path.stat().st_size,
                 ))
+            elif format_choice == 'compressed':
+                # Save as single compressed npz file (efficient for optical flow)
+                data_file = output_dir / "frames.npz"
+
+                # Collect all frame data
+                frame_data_list = []
+                timestamps = []
+                frame_numbers = []
+
+                for entry in entries:
+                    frame_data = entry.output.data
+
+                    # Apply mask if enabled
+                    if apply_mask and self.mask is not None:
+                        frame_data = self.mask.apply(frame_data)
+
+                    frame_data_list.append(frame_data)
+                    timestamps.append(entry.timestamp)
+                    frame_numbers.append(entry.frame_number)
+
+                # Stack and save with compression
+                try:
+                    stacked_data = np.stack(frame_data_list, axis=0)
+                    np.savez_compressed(
+                        data_file,
+                        frames=stacked_data.astype(np.float32),
+                        timestamps=np.array(timestamps, dtype=np.float64),
+                        frame_numbers=np.array(frame_numbers, dtype=np.int32),
+                    )
+                except Exception as e:
+                    print(f"Warning: Could not stack frames, saving individually: {e}")
+                    # Fall back to individual files
+                    frames_dir = output_dir / "frames"
+                    frames_dir.mkdir(exist_ok=True)
+                    for i, entry in enumerate(entries):
+                        frame_data = frame_data_list[i]
+                        frame_path = frames_dir / f"frame_{entry.frame_number:06d}.npz"
+                        np.savez_compressed(frame_path, frame=frame_data.astype(np.float32))
+
+                    data_file = frames_dir
+
+                output_files.append(OutputFileInfo(
+                    path=str(data_file.relative_to(self.output_dir)),
+                    type="frames",
+                    format="npz",
+                    description=f"Compressed frame outputs ({len(entries)} frames)",
+                    size_bytes=data_file.stat().st_size if data_file.is_file() else sum(
+                        f.stat().st_size for f in data_file.glob("*.npz")
+                    ),
+                ))
             else:
                 # Save as individual frame files (default)
                 frames_dir = output_dir / "frames"

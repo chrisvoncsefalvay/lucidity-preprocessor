@@ -67,8 +67,8 @@ def cli():
 )
 @click.option(
     '--output-format',
-    type=click.Choice(['frames', 'video'], case_sensitive=False),
-    help='Output format for frame-based models: "frames" (individual files) or "video" (MP4)',
+    type=click.Choice(['frames', 'video', 'compressed'], case_sensitive=False),
+    help='Output format for frame-based models: "frames" (individual .npy), "video" (MP4), or "compressed" (single .npz)',
 )
 @click.option(
     '--fps',
